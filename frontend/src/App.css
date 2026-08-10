@@ -1,0 +1,207 @@
+body {
+  font-family: Arial, sans-serif;
+  background: #f5f6fa;
+  margin: 0;
+  padding: 0;
+}
+
+.app {
+  max-width: 800px;
+  margin: 40px auto;
+  padding: 20px;
+}
+
+h1 {
+  font-size: 22px;
+  margin-bottom: 20px;
+}
+
+.request-form {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  background: white;
+  padding: 16px;
+  border-radius: 6px;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.1);
+}
+
+.request-form textarea {
+  padding: 8px;
+  font-size: 14px;
+  border: 1px solid #ccc;
+  border-radius: 4px;
+  resize: vertical;
+}
+
+.request-form button {
+  align-self: flex-start;
+  background: #2f5fd6;
+  color: white;
+  border: none;
+  padding: 8px 16px;
+  border-radius: 4px;
+  cursor: pointer;
+}
+
+.request-form button:disabled {
+  background: #9aa9d6;
+  cursor: not-allowed;
+}
+
+.error {
+  color: #c0392b;
+  margin-top: 12px;
+}
+
+.result-view {
+  margin-top: 24px;
+  background: white;
+  padding: 16px;
+  border-radius: 6px;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.1);
+}
+
+.result-view table {
+  border-collapse: collapse;
+  margin-bottom: 16px;
+}
+
+.result-view td {
+  padding: 4px 10px;
+  border-bottom: 1px solid #eee;
+  font-size: 14px;
+}
+
+.code-block {
+  background: #1e1e1e;
+  color: #d4d4d4;
+  padding: 12px;
+  border-radius: 4px;
+  overflow-x: auto;
+  font-size: 12px;
+  white-space: pre-wrap;
+}
+
+.live-test {
+  margin-top: 24px;
+  padding-top: 16px;
+  border-top: 1px solid #eee;
+}
+
+.live-test .hint {
+  font-size: 13px;
+  color: #666;
+  margin-top: -6px;
+}
+
+.live-test-fields {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  max-width: 320px;
+  margin-bottom: 12px;
+}
+
+.live-test-fields label {
+  display: flex;
+  flex-direction: column;
+  font-size: 13px;
+  gap: 4px;
+}
+
+.live-test-fields input {
+  padding: 6px 8px;
+  border: 1px solid #ccc;
+  border-radius: 4px;
+  font-size: 14px;
+}
+
+.live-test button {
+  background: #218c5a;
+  color: white;
+  border: none;
+  padding: 8px 16px;
+  border-radius: 4px;
+  cursor: pointer;
+}
+
+.live-test button:disabled {
+  background: #9ad0b6;
+  cursor: not-allowed;
+}
+
+.live-result {
+  margin-top: 12px;
+  padding: 8px 12px;
+  border-radius: 4px;
+  font-size: 14px;
+}
+
+.live-result-success {
+  background: #e6f7ec;
+  color: #1a7a41;
+}
+
+.live-result-failed {
+  background: #fdecea;
+  color: #a32c22;
+}
+
+.live-result-error {
+  background: #fff4e5;
+  color: #8a5b00;
+}
+
+.details-form {
+  background: white;
+  padding: 16px;
+  border-radius: 6px;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.1);
+}
+
+.details-form .hint {
+  font-size: 13px;
+  color: #555;
+  margin-bottom: 16px;
+}
+
+.details-form-fields {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  max-width: 320px;
+}
+
+.details-form-fields label {
+  display: flex;
+  flex-direction: column;
+  font-size: 13px;
+  gap: 4px;
+}
+
+.details-form-fields input {
+  padding: 6px 8px;
+  border: 1px solid #ccc;
+  border-radius: 4px;
+  font-size: 14px;
+}
+
+.details-form-buttons {
+  display: flex;
+  gap: 10px;
+  margin-top: 8px;
+}
+
+button.secondary {
+  background: #e5e7eb;
+  color: #333;
+  border: none;
+  padding: 8px 16px;
+  border-radius: 4px;
+  cursor: pointer;
+}
+
+.result-view button.secondary {
+  margin-top: 16px;
+}

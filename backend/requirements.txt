@@ -1,0 +1,14 @@
+
+
+fastapi
+uvicorn[standard]
+pydantic
+
+# Real connection drivers - only needed for the source types you'll actually
+# test live. Comment out lines for ones you don't need.
+psycopg2-binary
+mysql-connector-python
+pyodbc
+requests
+groq
+python-dotenv
