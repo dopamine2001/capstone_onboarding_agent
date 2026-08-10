@@ -1,9 +1,11 @@
 import React from "react";
 
+const API_BASE = "http://localhost:5001/api";
+
 function ResultView({ result, onStartOver }) {
   if (!result) return null;
 
-  const { spec, code, validation, documentation } = result;
+  const { id, spec, code, validation, documentation } = result;
   const connStatus = validation.connection_test.status;
 
   return (
@@ -26,6 +28,24 @@ function ResultView({ result, onStartOver }) {
       <p className={`live-result live-result-${connStatus}`}>
         <strong>{connStatus}</strong>: {validation.connection_test.message}
       </p>
+
+      {/* CHANGE 4: downloadable files, in addition to the text shown here */}
+      <div className="download-row">
+        <a
+          className="download-button"
+          href={`${API_BASE}/connectors/${id}/download/code`}
+          download
+        >
+          Download Code (.py)
+        </a>
+        <a
+          className="download-button"
+          href={`${API_BASE}/connectors/${id}/download/docs`}
+          download
+        >
+          Download Documentation (.md)
+        </a>
+      </div>
 
       <h2>Generated Connector Code</h2>
       <pre className="code-block">{code}</pre>

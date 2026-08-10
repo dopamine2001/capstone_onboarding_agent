@@ -205,3 +205,36 @@ button.secondary {
 .result-view button.secondary {
   margin-top: 16px;
 }
+
+.field-error {
+  color: #a32c22;
+  font-size: 12px;
+  margin-top: 2px;
+}
+
+.details-form-fields select {
+  padding: 6px 8px;
+  border: 1px solid #ccc;
+  border-radius: 4px;
+  font-size: 14px;
+}
+
+.download-row {
+  display: flex;
+  gap: 10px;
+  margin-bottom: 8px;
+}
+
+.download-button {
+  display: inline-block;
+  background: #2f5fd6;
+  color: white;
+  text-decoration: none;
+  padding: 8px 14px;
+  border-radius: 4px;
+  font-size: 14px;
+}
+
+.download-button:hover {
+  background: #24479f;
+}

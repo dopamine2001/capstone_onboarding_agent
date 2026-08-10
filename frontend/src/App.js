@@ -12,6 +12,7 @@ function App() {
   const [result, setResult] = useState(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState(null);
+  const [fieldErrors, setFieldErrors] = useState(null); // CHANGE 2
 
   const handleParse = async (text) => {
     setLoading(true);
@@ -24,7 +25,7 @@ function App() {
       });
       const data = await response.json();
       if (!response.ok) {
-        setError(data.detail || "Something went wrong.");
+        setError(typeof data.detail === "string" ? data.detail : "Something went wrong.");
       } else {
         setSpec(data);
         setStep("details");
@@ -39,6 +40,7 @@ function App() {
   const handleGenerate = async (formData) => {
     setLoading(true);
     setError(null);
+    setFieldErrors(null);
     try {
       const response = await fetch(`${API_BASE}/onboard`, {
         method: "POST",
@@ -46,8 +48,17 @@ function App() {
         body: JSON.stringify(formData),
       });
       const data = await response.json();
+
       if (!response.ok) {
-        setError(data.detail || "Something went wrong.");
+        // CHANGE 2: backend now sends {message, field_errors} instead of
+        // a single string, so show each error next to its own field.
+        const detail = data.detail;
+        if (detail && typeof detail === "object") {
+          setError(detail.message || "Please fix the highlighted fields.");
+          setFieldErrors(detail.field_errors || {});
+        } else {
+          setError(detail || "Something went wrong.");
+        }
       } else {
         setResult(data);
         setStep("result");
@@ -63,6 +74,7 @@ function App() {
     setSpec(null);
     setResult(null);
     setError(null);
+    setFieldErrors(null);
     setStep("describe");
   };
 
@@ -80,6 +92,7 @@ function App() {
           onGenerate={handleGenerate}
           onBack={handleStartOver}
           loading={loading}
+          fieldErrors={fieldErrors}
         />
       )}
 
