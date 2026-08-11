@@ -1,3 +1,7 @@
+* {
+  box-sizing: border-box;
+}
+
 body {
   font-family: Arial, sans-serif;
   background: #f5f6fa;
@@ -5,72 +9,235 @@ body {
   padding: 0;
 }
 
-.app {
-  max-width: 800px;
-  margin: 40px auto;
-  padding: 20px;
-}
-
-h1 {
-  font-size: 22px;
-  margin-bottom: 20px;
-}
-
-.request-form {
+.app-shell {
   display: flex;
   flex-direction: column;
-  gap: 8px;
+  height: 100vh;
+}
+
+.app-header {
+  padding: 12px 20px;
   background: white;
+  border-bottom: 1px solid #e2e2e2;
+}
+
+.app-header h1 {
+  font-size: 18px;
+  margin: 0;
+}
+
+.error {
+  color: #a32c22;
+  background: #fdecea;
+  padding: 8px 20px;
+  margin: 0;
+  font-size: 13px;
+}
+
+/* ---- chat panel (now full width — no right workspace panel) ---- */
+
+.chat-panel {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  max-width: 900px;
+  width: 100%;
+  margin: 0 auto;
+}
+
+.chat-feed {
+  flex: 1;
+  overflow-y: auto;
   padding: 16px;
-  border-radius: 6px;
-  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.1);
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
 }
 
-.request-form textarea {
-  padding: 8px;
+.chat-empty {
+  color: #888;
   font-size: 14px;
-  border: 1px solid #ccc;
-  border-radius: 4px;
-  resize: vertical;
+  text-align: center;
+  margin-top: 40px;
 }
 
-.request-form button {
-  align-self: flex-start;
+.chat-bubble {
+  max-width: 75%;
+  padding: 10px 14px;
+  border-radius: 12px;
+  font-size: 14px;
+  line-height: 1.4;
+  white-space: pre-wrap;
+}
+
+.chat-bubble-user {
+  align-self: flex-end;
   background: #2f5fd6;
   color: white;
-  border: none;
+  border-bottom-right-radius: 2px;
+}
+
+.chat-bubble-assistant {
+  align-self: flex-start;
+  background: white;
+  border: 1px solid #e2e2e2;
+  border-bottom-left-radius: 2px;
+}
+
+.chat-typing {
+  display: flex;
+  gap: 4px;
+  align-items: center;
+}
+
+.chat-typing .dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: #999;
+  animation: blink 1.2s infinite;
+}
+
+.chat-typing .dot:nth-child(2) { animation-delay: 0.2s; }
+.chat-typing .dot:nth-child(3) { animation-delay: 0.4s; }
+
+@keyframes blink {
+  0%, 80%, 100% { opacity: 0.2; }
+  40% { opacity: 1; }
+}
+
+.quick-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
   padding: 8px 16px;
-  border-radius: 4px;
+  border-top: 1px solid #eee;
+}
+
+.quick-action-button {
+  background: #eef1fb;
+  color: #2f5fd6;
+  border: 1px solid #d6dcf5;
+  border-radius: 16px;
+  padding: 6px 12px;
+  font-size: 12px;
   cursor: pointer;
 }
 
-.request-form button:disabled {
+.quick-action-button:hover {
+  background: #e0e6fa;
+}
+
+.quick-action-button:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.chat-input-row {
+  display: flex;
+  gap: 8px;
+  padding: 12px 16px;
+  border-top: 1px solid #e2e2e2;
+  background: white;
+}
+
+.chat-input-row input {
+  flex: 1;
+  padding: 10px 12px;
+  border: 1px solid #ccc;
+  border-radius: 20px;
+  font-size: 14px;
+}
+
+.chat-input-row button {
+  background: #2f5fd6;
+  color: white;
+  border: none;
+  padding: 0 20px;
+  border-radius: 20px;
+  cursor: pointer;
+}
+
+.chat-input-row button:disabled {
   background: #9aa9d6;
   cursor: not-allowed;
 }
 
-.error {
-  color: #c0392b;
-  margin-top: 12px;
-}
+/* ---- generation result bubble (rendered inline in the chat feed) ---- */
 
-.result-view {
-  margin-top: 24px;
+.generation-bubble {
+  align-self: flex-start;
+  max-width: 92%;
+  width: 92%;
   background: white;
+  border: 1px solid #e2e2e2;
+  border-radius: 12px;
   padding: 16px;
-  border-radius: 6px;
-  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.1);
 }
 
-.result-view table {
-  border-collapse: collapse;
+.badge-row {
+  display: flex;
+  gap: 8px;
+  margin-bottom: 8px;
+}
+
+.status-badge {
+  display: inline-block;
+  padding: 3px 10px;
+  border-radius: 12px;
+  font-size: 11px;
+  font-weight: bold;
+  text-transform: uppercase;
+}
+
+.status-badge-success,
+.status-badge-syntax-ok {
+  background: #e6f7ec;
+  color: #1a7a41;
+}
+
+.status-badge-failed,
+.status-badge-syntax-error,
+.status-badge-error {
+  background: #fdecea;
+  color: #a32c22;
+}
+
+.status-badge-dry_run {
+  background: #fff4e5;
+  color: #8a5b00;
+}
+
+.connection-message {
+  font-size: 12px;
+  color: #555;
+  margin-bottom: 12px;
+}
+
+.download-row {
+  display: flex;
+  gap: 8px;
   margin-bottom: 16px;
+  flex-wrap: wrap;
 }
 
-.result-view td {
-  padding: 4px 10px;
-  border-bottom: 1px solid #eee;
-  font-size: 14px;
+.download-button {
+  background: #2f5fd6;
+  color: white;
+  text-decoration: none;
+  padding: 6px 12px;
+  border-radius: 4px;
+  font-size: 12px;
+}
+
+.download-button:hover {
+  background: #24479f;
+}
+
+.generation-bubble h4 {
+  font-size: 13px;
+  margin: 16px 0 6px;
 }
 
 .code-block {
@@ -81,160 +248,17 @@ h1 {
   overflow-x: auto;
   font-size: 12px;
   white-space: pre-wrap;
+  max-height: 360px;
+  overflow-y: auto;
 }
 
-.live-test {
-  margin-top: 24px;
-  padding-top: 16px;
-  border-top: 1px solid #eee;
-}
-
-.live-test .hint {
-  font-size: 13px;
-  color: #666;
-  margin-top: -6px;
-}
-
-.live-test-fields {
-  display: flex;
-  flex-direction: column;
-  gap: 10px;
-  max-width: 320px;
-  margin-bottom: 12px;
-}
-
-.live-test-fields label {
-  display: flex;
-  flex-direction: column;
-  font-size: 13px;
-  gap: 4px;
-}
-
-.live-test-fields input {
-  padding: 6px 8px;
-  border: 1px solid #ccc;
+.doc-viewer {
+  background: #fafafa;
+  border: 1px solid #e2e2e2;
   border-radius: 4px;
-  font-size: 14px;
-}
-
-.live-test button {
-  background: #218c5a;
-  color: white;
-  border: none;
-  padding: 8px 16px;
-  border-radius: 4px;
-  cursor: pointer;
-}
-
-.live-test button:disabled {
-  background: #9ad0b6;
-  cursor: not-allowed;
-}
-
-.live-result {
-  margin-top: 12px;
-  padding: 8px 12px;
-  border-radius: 4px;
-  font-size: 14px;
-}
-
-.live-result-success {
-  background: #e6f7ec;
-  color: #1a7a41;
-}
-
-.live-result-failed {
-  background: #fdecea;
-  color: #a32c22;
-}
-
-.live-result-error {
-  background: #fff4e5;
-  color: #8a5b00;
-}
-
-.details-form {
-  background: white;
-  padding: 16px;
-  border-radius: 6px;
-  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.1);
-}
-
-.details-form .hint {
-  font-size: 13px;
-  color: #555;
-  margin-bottom: 16px;
-}
-
-.details-form-fields {
-  display: flex;
-  flex-direction: column;
-  gap: 10px;
-  max-width: 320px;
-}
-
-.details-form-fields label {
-  display: flex;
-  flex-direction: column;
-  font-size: 13px;
-  gap: 4px;
-}
-
-.details-form-fields input {
-  padding: 6px 8px;
-  border: 1px solid #ccc;
-  border-radius: 4px;
-  font-size: 14px;
-}
-
-.details-form-buttons {
-  display: flex;
-  gap: 10px;
-  margin-top: 8px;
-}
-
-button.secondary {
-  background: #e5e7eb;
-  color: #333;
-  border: none;
-  padding: 8px 16px;
-  border-radius: 4px;
-  cursor: pointer;
-}
-
-.result-view button.secondary {
-  margin-top: 16px;
-}
-
-.field-error {
-  color: #a32c22;
+  padding: 12px;
   font-size: 12px;
-  margin-top: 2px;
-}
-
-.details-form-fields select {
-  padding: 6px 8px;
-  border: 1px solid #ccc;
-  border-radius: 4px;
-  font-size: 14px;
-}
-
-.download-row {
-  display: flex;
-  gap: 10px;
-  margin-bottom: 8px;
-}
-
-.download-button {
-  display: inline-block;
-  background: #2f5fd6;
-  color: white;
-  text-decoration: none;
-  padding: 8px 14px;
-  border-radius: 4px;
-  font-size: 14px;
-}
-
-.download-button:hover {
-  background: #24479f;
+  white-space: pre-wrap;
+  max-height: 300px;
+  overflow-y: auto;
 }

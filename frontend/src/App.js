@@ -1,106 +1,64 @@
 import React, { useState } from "react";
-import RequestForm from "./components/RequestForm";
-import ConnectionDetailsForm from "./components/ConnectionDetailsForm";
-import ResultView from "./components/ResultView";
+import ChatPanel from "./components/ChatPanel";
 
 const API_BASE = "http://localhost:5001/api";
 
-// step: "describe" -> "details" -> "result"
 function App() {
-  const [step, setStep] = useState("describe");
-  const [spec, setSpec] = useState(null);
-  const [result, setResult] = useState(null);
+  const [sessionId, setSessionId] = useState(null);
+  const [messages, setMessages] = useState([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState(null);
-  const [fieldErrors, setFieldErrors] = useState(null); // CHANGE 2
 
-  const handleParse = async (text) => {
+  const handleSend = async (text, dummyMode) => {
     setLoading(true);
     setError(null);
+    setMessages((prev) => [...prev, { role: "user", type: "text", content: text }]);
+
     try {
-      const response = await fetch(`${API_BASE}/parse`, {
+      const response = await fetch(`${API_BASE}/chat`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ request: text }),
+        body: JSON.stringify({
+          session_id: sessionId,
+          message: text,
+          dummy_mode: dummyMode,
+        }),
       });
       const data = await response.json();
+
       if (!response.ok) {
         setError(typeof data.detail === "string" ? data.detail : "Something went wrong.");
-      } else {
-        setSpec(data);
-        setStep("details");
+        return;
+      }
+
+      setSessionId(data.session_id);
+      setMessages((prev) => [...prev, { role: "assistant", type: "text", content: data.message }]);
+
+      // Once the agent has gathered everything, the backend has ALREADY
+      // run the connection test + generated the code + docs — show it
+      // right in the chat feed, no separate panel needed.
+      if (data.result) {
+        setMessages((prev) => [
+          ...prev,
+          { role: "assistant", type: "generation", result: data.result },
+        ]);
       }
     } catch (err) {
       setError("Could not reach the backend. Is it running on port 5001?");
     } finally {
       setLoading(false);
     }
-  };
-
-  const handleGenerate = async (formData) => {
-    setLoading(true);
-    setError(null);
-    setFieldErrors(null);
-    try {
-      const response = await fetch(`${API_BASE}/onboard`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(formData),
-      });
-      const data = await response.json();
-
-      if (!response.ok) {
-        // CHANGE 2: backend now sends {message, field_errors} instead of
-        // a single string, so show each error next to its own field.
-        const detail = data.detail;
-        if (detail && typeof detail === "object") {
-          setError(detail.message || "Please fix the highlighted fields.");
-          setFieldErrors(detail.field_errors || {});
-        } else {
-          setError(detail || "Something went wrong.");
-        }
-      } else {
-        setResult(data);
-        setStep("result");
-      }
-    } catch (err) {
-      setError("Could not reach the backend. Is it running on port 5001?");
-    } finally {
-      setLoading(false);
-    }
-  };
-
-  const handleStartOver = () => {
-    setSpec(null);
-    setResult(null);
-    setError(null);
-    setFieldErrors(null);
-    setStep("describe");
   };
 
   return (
-    <div className="app">
-      <h1>Data Source Onboarding & Connector Generation Agent</h1>
-
-      {step === "describe" && (
-        <RequestForm onParse={handleParse} loading={loading} />
-      )}
-
-      {step === "details" && spec && (
-        <ConnectionDetailsForm
-          spec={spec}
-          onGenerate={handleGenerate}
-          onBack={handleStartOver}
-          loading={loading}
-          fieldErrors={fieldErrors}
-        />
-      )}
+    <div className="app-shell">
+      <header className="app-header">
+        <h1>Data Source Onboarding & Connector Generation Agent</h1>
+      </header>
 
       {error && <p className="error">{error}</p>}
 
-      {step === "result" && (
-        <ResultView result={result} onStartOver={handleStartOver} />
-      )}
+      <ChatPanel messages={messages} onSend={handleSend} loading={loading} />
     </div>
   );
 }

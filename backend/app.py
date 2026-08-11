@@ -45,6 +45,7 @@ import storage
 import real_connectors
 import pdf_generator
 import session_store
+import onboarding_service
 from field_schemas import get_field_schema, FIELD_SCHEMAS
 
 app = FastAPI(title="Data Source Onboarding & Connector Generation Agent")
@@ -111,16 +112,50 @@ def parse(body: ParseRequest):
 @app.post("/api/chat")
 def chat(body: ChatRequest):
     """Multi-turn conversational endpoint. The frontend keeps session_id
-    across turns; the agent asks clarifying/follow-up questions and only
-    returns status "ready" with a spec once it has enough information (or
-    the user asked for dummy/placeholder values via dummy_mode)."""
+    across turns; the agent asks clarifying/follow-up questions, remembering
+    everything gathered so far, and once status is "ready" this endpoint
+    AUTOMATICALLY runs the connection test + code generation + PDF docs and
+    returns the result inline — no separate form/endpoint needed."""
     message = body.message.strip()
     if not message:
         raise HTTPException(status_code=400, detail="Field 'message' is required.")
 
     session_id = body.session_id or str(uuid.uuid4())
-    result = agent.converse(session_id, message, dummy_mode=bool(body.dummy_mode))
-    return result
+    turn = agent.converse(session_id, message, dummy_mode=bool(body.dummy_mode))
+
+    response = {
+        "session_id": session_id,
+        "status": turn["status"],
+        "message": turn["message"],
+        "result": None,
+    }
+
+    if turn["status"] == "ready" and turn.get("spec"):
+        record, error = onboarding_service.run_onboarding(
+            turn["spec"], dry_run=bool(turn.get("dry_run"))
+        )
+
+        if error:
+            # Turn a generation failure into a natural chat message instead
+            # of an HTTP error, so the conversation can continue — and clear
+            # the offending field(s) from session memory so the user's next
+            # message is treated as a correction, not a duplicate.
+            field_errors = error.get("field_errors") or {}
+            session = session_store.get_session(session_id)
+            for field_name in field_errors:
+                session["spec"].pop(field_name, None)
+
+            if field_errors:
+                fix_list = ", ".join(field_errors.values())
+                response["message"] = f"{error['message']} Could you provide a corrected value? ({fix_list})"
+            else:
+                response["message"] = error["message"]
+            response["status"] = "need_info"
+        else:
+            response["result"] = record
+            response["message"] = turn["message"] + " Your connector is ready below."
+
+    return response
 
 
 @app.post("/api/chat/{session_id}/reset")
@@ -140,104 +175,16 @@ def fields_for_source_type(source_type: str):
 
 @app.post("/api/onboard", status_code=201)
 def onboard(body: GenerateRequest):
-    """User has entered real credentials (or requested dry-run/dummy mode).
-    Validate fields, run a REAL connection test (skipped in dry-run), and
-    generate connector code + LLM-written documentation."""
+    """Manual/legacy path — kept for direct API use. The chat flow no
+    longer calls this; it runs onboarding_service.run_onboarding()
+    automatically once enough fields are gathered in conversation."""
     spec = body.model_dump()
     dry_run = bool(spec.pop("dry_run", False))
 
-    # Fill in sensible defaults for anything left blank.
-    if not spec.get("port"):
-        spec["port"] = agent.default_port(spec["source_type"])
-    if not spec.get("database"):
-        spec["database"] = spec["source_name"]
-    if not spec.get("user"):
-        spec["user"] = "your_username"
-    if dry_run:
-        # Dummy/boilerplate mode: fill anything still missing with
-        # placeholders instead of blocking on it.
-        spec["host"] = spec.get("host") or "localhost"
-        spec["user"] = spec.get("user") or "test_user"
-        spec["password"] = spec.get("password") or "dummy_password"
-        spec["api_key"] = spec.get("api_key") or "dummy_api_key"
-        spec["auth_type"] = spec.get("auth_type") or "none"
-
-    # Field-level validation BEFORE attempting a connection — skipped in
-    # dry-run mode since missing fields are expected and get placeholders.
-    if not dry_run:
-        field_errors = validator.validate_fields(spec)
-        if field_errors:
-            raise HTTPException(
-                status_code=422,
-                detail={"message": "Please fix the highlighted fields.", "field_errors": field_errors},
-            )
-
-    if dry_run:
-        # DRY_RUN mode: never attempt a real network connection. Only
-        # syntax and class-interface validity are checked.
-        connection_result = {
-            "status": "dry_run",
-            "message": (
-                "Dry-run mode: no live connection was attempted. Syntax and "
-                "class interface were validated; replace the placeholder "
-                "values before using this against a real source."
-            ),
-            "field": None,
-        }
-    else:
-        # REAL connection test — don't generate anything unless this succeeds.
-        connection_result = real_connectors.test_real_connection(
-            spec["source_type"],
-            {
-                "host": spec.get("host"),
-                "port": spec.get("port"),
-                "database": spec.get("database"),
-                "user": spec.get("user"),
-                "password": spec.get("password"),
-                "auth_type": spec.get("auth_type"),
-                "api_key": spec.get("api_key"),
-            },
-        )
-
-        if connection_result["status"] != "success":
-            field = connection_result.get("field")
-            raise HTTPException(
-                status_code=400,
-                detail={
-                    "message": f"Connection {connection_result['status']}: {connection_result['message']}",
-                    "field_errors": {field: connection_result["message"]} if field else {},
-                },
-            )
-
-    # Generate connector code (reached if the connection worked, or in dry-run)
-    code, gen_error = generator.generate_connector_code(spec)
-    if gen_error:
-        raise HTTPException(status_code=400, detail={"message": gen_error, "field_errors": {}})
-
-    syntax_valid, syntax_error = validator.validate_syntax(code)
-
-    validation_report = {
-        "syntax_valid": syntax_valid,
-        "syntax_error": syntax_error,
-        "connection_test": connection_result,
-    }
-
-    # Documentation comes from the LLM (doc_generator tries Groq first,
-    # falls back to the template internally on failure).
-    documentation = doc_generator.generate_documentation(spec, code, dry_run=dry_run)
-
-    # Placeholder .env.example mapping for this source type.
-    env_example = generator.generate_env_example(spec)
-
-    # Save (never store the raw password/api_key)
-    stored_spec = {k: v for k, v in spec.items() if k not in ("password", "api_key")}
-    record = storage.save_connector({
-        "spec": stored_spec,
-        "code": code,
-        "env_example": env_example,
-        "validation": validation_report,
-        "documentation": documentation,
-    })
+    record, error = onboarding_service.run_onboarding(spec, dry_run=dry_run)
+    if error:
+        status_code = 422 if error["message"].startswith("Please fix") else 400
+        raise HTTPException(status_code=status_code, detail=error)
 
     return record
 

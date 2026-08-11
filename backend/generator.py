@@ -5,6 +5,13 @@ Takes a structured spec (from agent.py) and fills the matching template
 """
 from templates import TEMPLATES, TEMPLATE_VERSION
 
+ENV_VAR_MAP = {
+    "postgresql": ["DB_HOST", "DB_PORT", "DB_NAME", "DB_USER", "DB_PASSWORD"],
+    "mysql": ["DB_HOST", "DB_PORT", "DB_NAME", "DB_USER", "DB_PASSWORD"],
+    "sqlserver": ["DB_HOST", "DB_PORT", "DB_NAME", "DB_USER", "DB_PASSWORD"],
+    "rest_api": ["API_BASE_URL", "API_AUTH_TYPE", "API_CREDENTIAL"],
+}
+
 
 def _class_name(source_name):
     parts = [p.capitalize() for p in source_name.split("_") if p]
@@ -38,3 +45,13 @@ def generate_connector_code(spec):
         return None, f"Missing field for template: {e}"
 
     return code, None
+
+
+def generate_env_example(spec):
+    """Produces a .env.example listing the env vars this connector expects,
+    for the 'placeholder environment variable mappings' requirement."""
+    source_type = spec.get("source_type")
+    var_names = ENV_VAR_MAP.get(source_type, [])
+    lines = [f"# Environment variables for '{spec.get('source_name')}' ({source_type})"]
+    lines.extend(f"{name}=" for name in var_names)
+    return "\n".join(lines) + "\n"

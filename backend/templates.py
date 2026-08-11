@@ -63,6 +63,31 @@ class {class_name}:
             self.connection.close()
             self.connection = None
 
+    def disconnect(self):
+        """Alias for close(), matching common connector interface naming."""
+        self.close()
+
+    def extract_batch(self, query, batch_size=500):
+        """Memory-safe batch extraction — yields rows in chunks instead of
+        loading the whole result set into memory at once."""
+        if not self.connection:
+            self.connect()
+        cursor = self.connection.cursor()
+        cursor.execute(query)
+        while True:
+            rows = cursor.fetchmany(batch_size)
+            if not rows:
+                break
+            yield rows
+        cursor.close()
+
+    def __enter__(self):
+        self.connect()
+        return self
+
+    def __exit__(self, exc_type, exc_val, exc_tb):
+        self.close()
+
 
 if __name__ == "__main__":
     connector = {class_name}(
@@ -129,6 +154,29 @@ class {class_name}:
             self.connection.close()
             self.connection = None
 
+    def disconnect(self):
+        self.close()
+
+    def extract_batch(self, query, batch_size=500):
+        """Memory-safe batch extraction — yields rows in chunks."""
+        if not self.connection:
+            self.connect()
+        cursor = self.connection.cursor()
+        cursor.execute(query)
+        while True:
+            rows = cursor.fetchmany(batch_size)
+            if not rows:
+                break
+            yield rows
+        cursor.close()
+
+    def __enter__(self):
+        self.connect()
+        return self
+
+    def __exit__(self, exc_type, exc_val, exc_tb):
+        self.close()
+
 
 if __name__ == "__main__":
     connector = {class_name}(
@@ -194,6 +242,29 @@ class {class_name}:
             self.connection.close()
             self.connection = None
 
+    def disconnect(self):
+        self.close()
+
+    def extract_batch(self, query, batch_size=500):
+        """Memory-safe batch extraction — yields rows in chunks."""
+        if not self.connection:
+            self.connect()
+        cursor = self.connection.cursor()
+        cursor.execute(query)
+        while True:
+            rows = cursor.fetchmany(batch_size)
+            if not rows:
+                break
+            yield rows
+        cursor.close()
+
+    def __enter__(self):
+        self.connect()
+        return self
+
+    def __exit__(self, exc_type, exc_val, exc_tb):
+        self.close()
+
 
 if __name__ == "__main__":
     connector = {class_name}(
@@ -244,6 +315,31 @@ class {class_name}:
 
     def close(self):
         self.session.close()
+
+    def disconnect(self):
+        self.close()
+
+    def extract_batch(self, endpoint="", params=None, batch_size=100):
+        """Memory-safe batch extraction via simple page/limit pagination.
+        Adjust the pagination params to match your actual API's convention."""
+        params = dict(params or {{}})
+        page = 1
+        while True:
+            params.update({{"page": page, "limit": batch_size}})
+            url = f"{{self.base_url}}/{{endpoint}}".rstrip("/")
+            response = self.session.get(url, params=params, timeout=10)
+            response.raise_for_status()
+            data = response.json()
+            if not data:
+                break
+            yield data
+            page += 1
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, exc_type, exc_val, exc_tb):
+        self.close()
 
 
 if __name__ == "__main__":

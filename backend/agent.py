@@ -18,6 +18,7 @@ from groq import Groq
 
 import session_store
 import source_resolver
+import field_schemas
 
 load_dotenv()
 
@@ -103,130 +104,178 @@ def parse_request(request_text):
     return spec
 
 
-CHAT_SYSTEM_PROMPT = """You are a friendly data engineering onboarding assistant
-having a conversation to gather what's needed to onboard a new data source
-connector.
+EXTRACTION_SYSTEM_PROMPT = """Extract any of the following fields that the
+user's message actually mentions. Only include a field if it's genuinely
+present in the message — omit anything not mentioned. Respond with ONLY a
+JSON object, no other text.
 
-You need to eventually know:
+Fields:
+- source_name: short snake_case name for the source, if given or implied
 - source_type: one of "postgresql", "mysql", "sqlserver", "rest_api"
+  (map obvious synonyms/typos: "pg"/"postge"/"postgres" -> "postgresql",
+  "mssql"/"ms sql" -> "sqlserver")
 - auth_method: one of "username_password", "api_key", "oauth", "none"
-- source_name: a short snake_case name for the source
-- host: hostname or base URL, if the user has mentioned one (optional)
-
-Rules:
-- If the user's message is genuinely ambiguous about source_type (e.g. "a SQL
-  database" without saying which engine, or just "an API"), do NOT guess.
-  Ask ONE short, polite clarifying question instead, e.g.: "Could you tell me
-  which SQL database you mean — PostgreSQL, MySQL, or SQL Server?"
-- If source_type is already clear (including from typos/abbreviations like
-  "pg" or "mssql") but auth_method or source_name is still unknown, ask a
-  single short, natural follow-up question for the most important missing
-  piece.
-- If the user explicitly says things like "just generate it", "use
-  defaults", "dummy data", or "I don't have real details yet" — treat that as
-  a request to fill in any missing fields with sensible placeholders and
-  proceed.
-- Once source_type and auth_method are both known (or defaulted), mark the
-  spec ready. Do not ask more questions than necessary.
-
-Always respond with ONLY a JSON object (no markdown, no extra text):
-{
-  "status": "clarify" | "need_info" | "ready",
-  "message": "<a short, natural chat reply — a question, or a confirmation>",
-  "spec": {"source_name": "...", "source_type": "...", "auth_method": "...", "host": "..."}
-}
-Only include spec keys you're actually confident about; omit unknown ones.
+- auth_type: for REST APIs only — one of "none", "api_key", "bearer_token"
+- host: hostname, IP address, or base URL
+- port: port number (as an integer)
+- database: database name
+- user: username
+- password: password
+- api_key: API key or token value
 """
+
+
+def _extract_fields_from_message(message):
+    try:
+        response = client.chat.completions.create(
+            model=MODEL,
+            temperature=0,
+            messages=[
+                {"role": "system", "content": EXTRACTION_SYSTEM_PROMPT},
+                {"role": "user", "content": message},
+            ],
+        )
+        return _extract_json(response.choices[0].message.content)
+    except Exception as e:
+        print(f"Field extraction failed: {e}")
+        return {}
+
+
+def _missing_fields(spec):
+    """Deterministically compute which required fields are still missing,
+    using field_schemas.py as the single source of truth — the same schema
+    that used to drive the (now-removed) credentials form."""
+    missing = []
+
+    if not spec.get("source_name"):
+        missing.append({"name": "source_name", "label": "a name for this source"})
+
+    source_type = spec.get("source_type")
+    if not source_type or source_type == "unknown":
+        return missing  # can't know connection fields until source_type is known
+
+    for field in field_schemas.get_field_schema(source_type):
+        name = field["name"]
+        if source_type == "rest_api" and name == "api_key":
+            auth_type = spec.get("auth_type", "none")
+            if auth_type in ("api_key", "bearer_token") and not spec.get("api_key"):
+                missing.append(field)
+            continue
+        if field.get("required") and not spec.get(name):
+            missing.append(field)
+
+    return missing
+
+
+def _ask_for_missing(missing_fields):
+    names = [f["name"] for f in missing_fields]
+    labels = [f.get("label", f["name"]) for f in missing_fields]
+
+    if names == ["source_name"]:
+        return "What would you like to name this source?"
+
+    if "source_name" in names:
+        labels[names.index("source_name")] = "a name for this source"
+
+    if len(labels) == 1:
+        return f"Got it! Now I just need the {labels[0]}."
+    return "Got it! I still need: " + ", ".join(labels[:-1]) + f", and {labels[-1]}."
+
+
+def _finalize_spec(spec, raw_request):
+    source_type = spec.get("source_type", "unknown")
+    return {
+        "source_name": spec.get("source_name", "new_source"),
+        "source_type": source_type,
+        "auth_method": spec.get("auth_method", "username_password"),
+        "host": spec.get("host", "localhost"),
+        "port": spec.get("port") or default_port(source_type),
+        "database": spec.get("database") or spec.get("source_name", "new_source"),
+        "user": spec.get("user", "your_username"),
+        "password": spec.get("password"),
+        "auth_type": spec.get("auth_type", "none"),
+        "api_key": spec.get("api_key"),
+        "raw_request": raw_request,
+    }
 
 
 def converse(session_id, user_message, dummy_mode=False):
     """
     Multi-turn conversational entry point. Keeps context across calls using
-    session_id, asks clarifying/follow-up questions when needed, and only
-    returns a final spec once (status == "ready").
+    session_id. Field extraction/tracking is deterministic (Python, backed
+    by field_schemas.py) rather than trusting the LLM to remember state
+    across turns — the LLM is only used to pull whatever fields appear in
+    THIS message. Only returns status "ready" once every required field
+    for the detected source type has actually been gathered (or dummy_mode
+    was requested).
     """
     session = session_store.get_session(session_id)
-
-    # Deterministic fuzzy/synonym backstop — catches typos and abbreviations
-    # ("pg", "postge", "mssql") reliably even if the LLM's own read is off,
-    # and flags genuinely ambiguous phrasing so we don't silently guess.
-    resolved_type, is_ambiguous = source_resolver.resolve_source_type(user_message)
-
-    llm_user_message = user_message
-    if dummy_mode:
-        llm_user_message += (
-            "\n\n(The user wants to proceed with dummy/placeholder values "
-            "for anything still missing — do not ask further questions.)"
-        )
-    llm_user_message += f"\n\nInformation already gathered so far: {json.dumps(session['spec'])}"
-
     session["messages"].append({"role": "user", "content": user_message})
 
-    conversation_for_llm = [{"role": "system", "content": CHAT_SYSTEM_PROMPT}]
-    conversation_for_llm.extend(session["messages"][-8:-1])  # prior turns, for context
-    conversation_for_llm.append({"role": "user", "content": llm_user_message})
-
-    try:
-        response = client.chat.completions.create(
-            model=MODEL,
-            temperature=0,
-            messages=conversation_for_llm,
-        )
-        parsed = _extract_json(response.choices[0].message.content)
-    except Exception as e:
-        print(f"Conversational parsing failed: {e}")
-        parsed = {
-            "status": "need_info",
-            "message": "Sorry, I had trouble understanding that — could you rephrase?",
-            "spec": {},
-        }
-
-    spec_update = parsed.get("spec", {}) or {}
-
-    # If the LLM missed an obvious typo/abbreviation, use our deterministic match.
-    if resolved_type and not spec_update.get("source_type"):
-        spec_update["source_type"] = resolved_type
-
-    # If phrasing was clearly ambiguous and nothing resolved it, force a clarify.
-    if is_ambiguous and not spec_update.get("source_type") and not session["spec"].get("source_type"):
-        parsed["status"] = "clarify"
-        if not parsed.get("message"):
-            parsed["message"] = (
-                "Could you tell me which specific database or API you mean? "
-                "We currently support PostgreSQL, MySQL, SQL Server, and REST APIs."
-            )
-
-    session["spec"].update({k: v for k, v in spec_update.items() if v})
-
     if dummy_mode:
-        session["spec"].setdefault("source_type", "postgresql")
-        session["spec"].setdefault("auth_method", "username_password")
-        session["spec"].setdefault("source_name", "new_source")
-        session["spec"].setdefault("host", "localhost")
-        parsed["status"] = "ready"
-        if not parsed.get("message"):
-            parsed["message"] = "Got it — generating with placeholder/dummy values."
+        session["dummy_mode"] = True
 
-    session["messages"].append({"role": "assistant", "content": parsed.get("message", "")})
+    # Deterministic fuzzy/synonym backstop for source_type — catches typos
+    # and abbreviations ("pg", "postge", "mssql") reliably.
+    resolved_type, is_ambiguous = source_resolver.resolve_source_type(user_message)
 
-    final_spec = None
-    if parsed.get("status") == "ready":
-        st = session["spec"].get("source_type", "unknown")
-        source_name = session["spec"].get("source_name", "new_source")
-        final_spec = {
-            "source_name": source_name,
-            "source_type": st,
-            "auth_method": session["spec"].get("auth_method", "username_password"),
-            "host": session["spec"].get("host", "localhost"),
-            "port": default_port(st),
-            "database": source_name,
-            "user": "your_username",
-            "raw_request": user_message,
+    # LLM extracts whatever fields are mentioned in THIS message only.
+    extracted = _extract_fields_from_message(user_message)
+    if resolved_type and not extracted.get("source_type"):
+        extracted["source_type"] = resolved_type
+
+    # Merge into the running spec (never overwrite a known value with a blank).
+    for key, value in extracted.items():
+        if value in (None, ""):
+            continue
+        if key == "port":
+            try:
+                value = int(value)
+            except (TypeError, ValueError):
+                continue
+        session["spec"][key] = value
+
+    spec = session["spec"]
+
+    # Ambiguity check — only matters while source_type is still unknown.
+    if (not spec.get("source_type") or spec.get("source_type") == "unknown") and is_ambiguous:
+        message = (
+            "Could you tell me which specific database or API you mean? "
+            "We currently support PostgreSQL, MySQL, SQL Server, and REST APIs."
+        )
+        session["messages"].append({"role": "assistant", "content": message})
+        return {"session_id": session_id, "status": "clarify", "message": message, "spec": None}
+
+    # Dummy mode: fill in anything still missing and go straight to ready.
+    if session.get("dummy_mode"):
+        spec.setdefault("source_type", "postgresql")
+        spec.setdefault("source_name", "new_source")
+        spec.setdefault("auth_method", "username_password")
+        spec.setdefault("host", "localhost")
+        message = "Got it — generating with placeholder/dummy values."
+        session["messages"].append({"role": "assistant", "content": message})
+        return {
+            "session_id": session_id,
+            "status": "ready",
+            "message": message,
+            "spec": _finalize_spec(spec, user_message),
+            "dry_run": True,
         }
 
+    # Ask for whatever's still missing, remembering everything gathered so far.
+    missing = _missing_fields(spec)
+    if missing:
+        message = _ask_for_missing(missing)
+        session["messages"].append({"role": "assistant", "content": message})
+        return {"session_id": session_id, "status": "need_info", "message": message, "spec": None}
+
+    # Everything required is present — ready to generate automatically.
+    message = f"{spec.get('source_type', 'source').capitalize()} connection spec is complete. Generating your connector now..."
+    session["messages"].append({"role": "assistant", "content": message})
     return {
         "session_id": session_id,
-        "status": parsed.get("status", "need_info"),
-        "message": parsed.get("message", ""),
-        "spec": final_spec,
+        "status": "ready",
+        "message": message,
+        "spec": _finalize_spec(spec, user_message),
+        "dry_run": False,
     }

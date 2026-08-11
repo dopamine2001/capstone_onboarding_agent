@@ -10,3 +10,5 @@ pyodbc
 requests
 python-dotenv
 groq
+markdown
+xhtml2pdf

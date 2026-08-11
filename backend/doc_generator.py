@@ -95,14 +95,22 @@ It will print whether the connection succeeded.
     return doc
 
 
-def generate_documentation_llm(spec, code):
+def generate_documentation_llm(spec, code, dry_run=False):
     """Ask the LLM to write documentation based on the real generated code
     and spec. Raises on failure — caller is expected to catch and fall
     back to the template version."""
+    dry_run_note = (
+        "\nNote: this connector was generated in DRY-RUN / boilerplate mode "
+        "using dummy/placeholder values, not a live connection. Mention that "
+        "the user should replace the placeholders with real values before "
+        "using it against a real source.\n"
+        if dry_run else ""
+    )
+
     prompt = f"""You are a technical writer for a data engineering team.
 Write onboarding documentation in Markdown for the following auto-generated
 Python connector.
-
+{dry_run_note}
 Source spec:
 - source_name: {spec.get('source_name')}
 - source_type: {spec.get('source_type')}
@@ -115,15 +123,40 @@ Generated connector code:
 {code}
 ```
 
-Write the documentation with these sections, in Markdown:
-1. "## Overview" — what this connector is for, in one or two sentences.
-2. "## What this connector does" — a plain-English explanation of the code
-   (what each main method does).
-3. "## Dependencies" — the pip install command for whatever library the
-   code imports.
-4. "## Configuration" — what the user needs to fill in before using it
-   (host, credentials, etc.) — don't repeat real credential values.
-5. "## How to test it" — how to run the file directly.
+Write the documentation with EXACTLY these sections, in Markdown, in this order:
+
+## Overview
+What this connector is for, in one or two sentences.
+
+## What this connector does
+A plain-English explanation of the code.
+
+## Environment Setup
+Step-by-step setup instructions, including:
+1. Creating and activating a virtual environment — show both commands:
+   - macOS/Linux: `python3 -m venv venv && source venv/bin/activate`
+   - Windows: `python -m venv venv && venv\\Scripts\\activate`
+2. Installing the dependency this connector needs. IMPORTANT: the user only
+   downloaded this single .py file, NOT a full project with a
+   requirements.txt — so do NOT tell them to run `pip install -r
+   requirements.txt`. Instead, tell them to install the specific package(s)
+   directly, exactly like this: `pip install {' '.join(DEPENDENCIES.get(spec.get('source_type'), []))}`
+
+## Configuration
+Explain what should go in a `.env` file — list each relevant environment
+variable and what it's for. Do not include real credential values.
+
+## Code Architecture
+Briefly explain what each of these methods does, based on the actual code
+above: connect(), disconnect(), test_connection(), fetch_schema(), and
+extract_batch() (the memory-safe batch extraction method).
+
+## Quickstart
+A short, ready-to-run Python code snippet showing the connector used as a
+context manager, e.g. `with {spec.get('source_name', 'connector')}... as conn:`.
+
+## Original Request
+Quote the original request: "{spec.get('raw_request')}"
 
 Respond with ONLY the Markdown documentation, no preamble or commentary
 outside of it.
@@ -136,10 +169,10 @@ outside of it.
     return response.choices[0].message.content
 
 
-def generate_documentation(spec, code):
+def generate_documentation(spec, code, dry_run=False):
     """Try the LLM first; fall back to the template on any failure."""
     try:
-        return generate_documentation_llm(spec, code)
+        return generate_documentation_llm(spec, code, dry_run=dry_run)
     except Exception as e:
         print(f"LLM documentation generation failed, using template fallback: {e}")
         return generate_documentation_template(spec, code)
