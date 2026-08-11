@@ -1,31 +1,40 @@
 """
 Data Source Onboarding & Connector Generation Agent — Backend API (FastAPI).
 
-Two-step flow:
-    1. POST /api/parse    -> agent reads the NL request, returns extracted spec
-                              (source type, auth method, guessed name) — no code
-                              generated yet.
-    2. POST /api/onboard  -> user has filled in REAL connection details; this
-                              validates those fields, runs a REAL connection
-                              test, and (only on success) generates the
-                              connector code + LLM-written documentation.
+Conversational flow:
+    1. POST /api/chat      -> multi-turn chat with session memory. The agent
+                               asks clarifying/follow-up questions until it
+                               has enough info, then returns status "ready"
+                               with a spec.
+    2. POST /api/onboard   -> user has filled in REAL connection details (or
+                               requested dry-run/dummy mode); this validates
+                               those fields, runs a REAL connection test (or
+                               skips it in dry-run mode), and generates the
+                               connector code + LLM-written documentation.
 
 Other endpoints:
-    GET  /api/fields/{source_type}        -> which input fields this source type needs
-    GET  /api/connectors                  -> list all previously generated connectors
-    GET  /api/connectors/{id}             -> get one connector's full details
-    POST /api/connectors/{id}/test-live   -> re-test a saved connector with credentials
+    GET  /api/fields/{source_type}          -> which input fields this source type needs
+    GET  /api/connectors                    -> list all previously generated connectors
+    GET  /api/connectors/{id}               -> get one connector's full details
+    POST /api/connectors/{id}/test-live     -> re-test a saved connector with credentials
     GET  /api/connectors/{id}/download/code -> download the generated .py file
-    GET  /api/connectors/{id}/download/docs -> download the generated .md file
+    GET  /api/connectors/{id}/download/docs -> download the documentation as a PDF
+    GET  /api/connectors/{id}/download/bundle -> download .py + .pdf + .env.example as a .zip
+
+Legacy (kept, no longer used by the chat UI):
+    POST /api/parse -> original one-shot NL parser
 
 Run with:
     uvicorn app:app --reload --port 5001
 """
+import io
+import uuid
+import zipfile
 from typing import Optional
 
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import PlainTextResponse
+from fastapi.responses import PlainTextResponse, Response
 from pydantic import BaseModel
 
 import agent
@@ -34,6 +43,8 @@ import validator
 import doc_generator
 import storage
 import real_connectors
+import pdf_generator
+import session_store
 from field_schemas import get_field_schema, FIELD_SCHEMAS
 
 app = FastAPI(title="Data Source Onboarding & Connector Generation Agent")
@@ -51,8 +62,15 @@ class ParseRequest(BaseModel):
     request: str
 
 
+class ChatRequest(BaseModel):
+    session_id: Optional[str] = None
+    message: str
+    dummy_mode: Optional[bool] = False
+
+
 class GenerateRequest(BaseModel):
-    """Sent once the user has filled in their REAL connection details."""
+    """Sent once the user has filled in their REAL connection details
+    (or requested dry-run/dummy-data mode)."""
     source_name: str
     source_type: str
     auth_method: Optional[str] = None
@@ -64,6 +82,7 @@ class GenerateRequest(BaseModel):
     auth_type: Optional[str] = None   # rest_api only: "none" | "api_key" | "bearer_token"
     api_key: Optional[str] = None
     raw_request: Optional[str] = None
+    dry_run: Optional[bool] = False   # skip the real connection test, use placeholders
 
 
 class LiveTestRequest(BaseModel):
@@ -89,6 +108,27 @@ def parse(body: ParseRequest):
     return spec
 
 
+@app.post("/api/chat")
+def chat(body: ChatRequest):
+    """Multi-turn conversational endpoint. The frontend keeps session_id
+    across turns; the agent asks clarifying/follow-up questions and only
+    returns status "ready" with a spec once it has enough information (or
+    the user asked for dummy/placeholder values via dummy_mode)."""
+    message = body.message.strip()
+    if not message:
+        raise HTTPException(status_code=400, detail="Field 'message' is required.")
+
+    session_id = body.session_id or str(uuid.uuid4())
+    result = agent.converse(session_id, message, dummy_mode=bool(body.dummy_mode))
+    return result
+
+
+@app.post("/api/chat/{session_id}/reset")
+def chat_reset(session_id: str):
+    session_store.reset_session(session_id)
+    return {"reset": True}
+
+
 @app.get("/api/fields/{source_type}")
 def fields_for_source_type(source_type: str):
     """CHANGE 1: which input fields this source type needs. The frontend
@@ -100,10 +140,11 @@ def fields_for_source_type(source_type: str):
 
 @app.post("/api/onboard", status_code=201)
 def onboard(body: GenerateRequest):
-    """Step 2: user has entered real credentials. Validate fields, run a
-    REAL connection test, and (only on success) generate connector code +
-    LLM-written documentation."""
+    """User has entered real credentials (or requested dry-run/dummy mode).
+    Validate fields, run a REAL connection test (skipped in dry-run), and
+    generate connector code + LLM-written documentation."""
     spec = body.model_dump()
+    dry_run = bool(spec.pop("dry_run", False))
 
     # Fill in sensible defaults for anything left blank.
     if not spec.get("port"):
@@ -112,45 +153,63 @@ def onboard(body: GenerateRequest):
         spec["database"] = spec["source_name"]
     if not spec.get("user"):
         spec["user"] = "your_username"
+    if dry_run:
+        # Dummy/boilerplate mode: fill anything still missing with
+        # placeholders instead of blocking on it.
+        spec["host"] = spec.get("host") or "localhost"
+        spec["user"] = spec.get("user") or "test_user"
+        spec["password"] = spec.get("password") or "dummy_password"
+        spec["api_key"] = spec.get("api_key") or "dummy_api_key"
+        spec["auth_type"] = spec.get("auth_type") or "none"
 
-    # CHANGE 2 (part 1): field-level validation BEFORE attempting a
-    # connection, so obviously-missing fields get an immediate,
-    # per-field error instead of a vague connection failure.
-    field_errors = validator.validate_fields(spec)
-    if field_errors:
-        raise HTTPException(
-            status_code=422,
-            detail={"message": "Please fix the highlighted fields.", "field_errors": field_errors},
-        )
+    # Field-level validation BEFORE attempting a connection — skipped in
+    # dry-run mode since missing fields are expected and get placeholders.
+    if not dry_run:
+        field_errors = validator.validate_fields(spec)
+        if field_errors:
+            raise HTTPException(
+                status_code=422,
+                detail={"message": "Please fix the highlighted fields.", "field_errors": field_errors},
+            )
 
-    # REAL connection test — don't generate anything unless this succeeds.
-    connection_result = real_connectors.test_real_connection(
-        spec["source_type"],
-        {
-            "host": spec.get("host"),
-            "port": spec.get("port"),
-            "database": spec.get("database"),
-            "user": spec.get("user"),
-            "password": spec.get("password"),
-            "auth_type": spec.get("auth_type"),
-            "api_key": spec.get("api_key"),
-        },
-    )
-
-    if connection_result["status"] != "success":
-        # CHANGE 2 (part 2): attach the specific field the real connection
-        # error points to (e.g. "password", "host"), determined in
-        # real_connectors.py / validator.map_connection_error_to_field.
-        field = connection_result.get("field")
-        raise HTTPException(
-            status_code=400,
-            detail={
-                "message": f"Connection {connection_result['status']}: {connection_result['message']}",
-                "field_errors": {field: connection_result["message"]} if field else {},
+    if dry_run:
+        # DRY_RUN mode: never attempt a real network connection. Only
+        # syntax and class-interface validity are checked.
+        connection_result = {
+            "status": "dry_run",
+            "message": (
+                "Dry-run mode: no live connection was attempted. Syntax and "
+                "class interface were validated; replace the placeholder "
+                "values before using this against a real source."
+            ),
+            "field": None,
+        }
+    else:
+        # REAL connection test — don't generate anything unless this succeeds.
+        connection_result = real_connectors.test_real_connection(
+            spec["source_type"],
+            {
+                "host": spec.get("host"),
+                "port": spec.get("port"),
+                "database": spec.get("database"),
+                "user": spec.get("user"),
+                "password": spec.get("password"),
+                "auth_type": spec.get("auth_type"),
+                "api_key": spec.get("api_key"),
             },
         )
 
-    # Generate connector code (only reached if the connection worked)
+        if connection_result["status"] != "success":
+            field = connection_result.get("field")
+            raise HTTPException(
+                status_code=400,
+                detail={
+                    "message": f"Connection {connection_result['status']}: {connection_result['message']}",
+                    "field_errors": {field: connection_result["message"]} if field else {},
+                },
+            )
+
+    # Generate connector code (reached if the connection worked, or in dry-run)
     code, gen_error = generator.generate_connector_code(spec)
     if gen_error:
         raise HTTPException(status_code=400, detail={"message": gen_error, "field_errors": {}})
@@ -163,15 +222,19 @@ def onboard(body: GenerateRequest):
         "connection_test": connection_result,
     }
 
-    # CHANGE 3: documentation now comes from the LLM (doc_generator tries
-    # Groq first, falls back to the template internally on failure).
-    documentation = doc_generator.generate_documentation(spec, code)
+    # Documentation comes from the LLM (doc_generator tries Groq first,
+    # falls back to the template internally on failure).
+    documentation = doc_generator.generate_documentation(spec, code, dry_run=dry_run)
+
+    # Placeholder .env.example mapping for this source type.
+    env_example = generator.generate_env_example(spec)
 
     # Save (never store the raw password/api_key)
     stored_spec = {k: v for k, v in spec.items() if k not in ("password", "api_key")}
     record = storage.save_connector({
         "spec": stored_spec,
         "code": code,
+        "env_example": env_example,
         "validation": validation_report,
         "documentation": documentation,
     })
@@ -207,10 +270,10 @@ def test_live_connection(connector_id: int, body: LiveTestRequest):
     return result
 
 
-# CHANGE 4: downloadable files alongside the JSON response.
-# The frontend gets everything as JSON from /api/onboard already; these two
-# endpoints let the user click a real download link/button for the same
-# code and documentation as standalone files.
+# Downloadable files alongside the chat/JSON response: the frontend gets
+# everything as JSON from /api/onboard already; these endpoints let the
+# user click a real download link/button for the code, documentation
+# (as PDF), or a single .zip bundle of everything.
 
 @app.get("/api/connectors/{connector_id}/download/code")
 def download_code(connector_id: int):
@@ -225,13 +288,39 @@ def download_code(connector_id: int):
 
 @app.get("/api/connectors/{connector_id}/download/docs")
 def download_docs(connector_id: int):
+    """Documentation is delivered as a PDF, generated on the fly from the
+    saved Markdown."""
     record = storage.get_by_id(connector_id)
     if not record:
         raise HTTPException(status_code=404, detail="Not found")
 
-    filename = f"{record['spec']['source_name']}_documentation.md"
+    pdf_bytes = pdf_generator.markdown_to_pdf_bytes(record["documentation"])
+    filename = f"{record['spec']['source_name']}_documentation.pdf"
     headers = {"Content-Disposition": f'attachment; filename="{filename}"'}
-    return PlainTextResponse(record["documentation"], headers=headers, media_type="text/markdown")
+    return Response(content=pdf_bytes, headers=headers, media_type="application/pdf")
+
+
+@app.get("/api/connectors/{connector_id}/download/bundle")
+def download_bundle(connector_id: int):
+    """A single .zip containing the connector code, documentation PDF, and
+    a .env.example — everything needed to start using the connector."""
+    record = storage.get_by_id(connector_id)
+    if not record:
+        raise HTTPException(status_code=404, detail="Not found")
+
+    pdf_bytes = pdf_generator.markdown_to_pdf_bytes(record["documentation"])
+    source_name = record["spec"]["source_name"]
+
+    buffer = io.BytesIO()
+    with zipfile.ZipFile(buffer, "w", zipfile.ZIP_DEFLATED) as zf:
+        zf.writestr(f"{source_name}_connector.py", record["code"])
+        zf.writestr(f"{source_name}_documentation.pdf", pdf_bytes)
+        zf.writestr(".env.example", record.get("env_example", ""))
+    buffer.seek(0)
+
+    filename = f"{source_name}_bundle.zip"
+    headers = {"Content-Disposition": f'attachment; filename="{filename}"'}
+    return Response(content=buffer.getvalue(), headers=headers, media_type="application/zip")
 
 
 if __name__ == "__main__":

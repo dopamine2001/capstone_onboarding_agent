@@ -16,6 +16,9 @@ import re
 from dotenv import load_dotenv
 from groq import Groq
 
+import session_store
+import source_resolver
+
 load_dotenv()
 
 client = Groq(api_key=os.environ.get("GROQ_API_KEY"))
@@ -98,3 +101,132 @@ def parse_request(request_text):
         "raw_request": request_text,
     }
     return spec
+
+
+CHAT_SYSTEM_PROMPT = """You are a friendly data engineering onboarding assistant
+having a conversation to gather what's needed to onboard a new data source
+connector.
+
+You need to eventually know:
+- source_type: one of "postgresql", "mysql", "sqlserver", "rest_api"
+- auth_method: one of "username_password", "api_key", "oauth", "none"
+- source_name: a short snake_case name for the source
+- host: hostname or base URL, if the user has mentioned one (optional)
+
+Rules:
+- If the user's message is genuinely ambiguous about source_type (e.g. "a SQL
+  database" without saying which engine, or just "an API"), do NOT guess.
+  Ask ONE short, polite clarifying question instead, e.g.: "Could you tell me
+  which SQL database you mean — PostgreSQL, MySQL, or SQL Server?"
+- If source_type is already clear (including from typos/abbreviations like
+  "pg" or "mssql") but auth_method or source_name is still unknown, ask a
+  single short, natural follow-up question for the most important missing
+  piece.
+- If the user explicitly says things like "just generate it", "use
+  defaults", "dummy data", or "I don't have real details yet" — treat that as
+  a request to fill in any missing fields with sensible placeholders and
+  proceed.
+- Once source_type and auth_method are both known (or defaulted), mark the
+  spec ready. Do not ask more questions than necessary.
+
+Always respond with ONLY a JSON object (no markdown, no extra text):
+{
+  "status": "clarify" | "need_info" | "ready",
+  "message": "<a short, natural chat reply — a question, or a confirmation>",
+  "spec": {"source_name": "...", "source_type": "...", "auth_method": "...", "host": "..."}
+}
+Only include spec keys you're actually confident about; omit unknown ones.
+"""
+
+
+def converse(session_id, user_message, dummy_mode=False):
+    """
+    Multi-turn conversational entry point. Keeps context across calls using
+    session_id, asks clarifying/follow-up questions when needed, and only
+    returns a final spec once (status == "ready").
+    """
+    session = session_store.get_session(session_id)
+
+    # Deterministic fuzzy/synonym backstop — catches typos and abbreviations
+    # ("pg", "postge", "mssql") reliably even if the LLM's own read is off,
+    # and flags genuinely ambiguous phrasing so we don't silently guess.
+    resolved_type, is_ambiguous = source_resolver.resolve_source_type(user_message)
+
+    llm_user_message = user_message
+    if dummy_mode:
+        llm_user_message += (
+            "\n\n(The user wants to proceed with dummy/placeholder values "
+            "for anything still missing — do not ask further questions.)"
+        )
+    llm_user_message += f"\n\nInformation already gathered so far: {json.dumps(session['spec'])}"
+
+    session["messages"].append({"role": "user", "content": user_message})
+
+    conversation_for_llm = [{"role": "system", "content": CHAT_SYSTEM_PROMPT}]
+    conversation_for_llm.extend(session["messages"][-8:-1])  # prior turns, for context
+    conversation_for_llm.append({"role": "user", "content": llm_user_message})
+
+    try:
+        response = client.chat.completions.create(
+            model=MODEL,
+            temperature=0,
+            messages=conversation_for_llm,
+        )
+        parsed = _extract_json(response.choices[0].message.content)
+    except Exception as e:
+        print(f"Conversational parsing failed: {e}")
+        parsed = {
+            "status": "need_info",
+            "message": "Sorry, I had trouble understanding that — could you rephrase?",
+            "spec": {},
+        }
+
+    spec_update = parsed.get("spec", {}) or {}
+
+    # If the LLM missed an obvious typo/abbreviation, use our deterministic match.
+    if resolved_type and not spec_update.get("source_type"):
+        spec_update["source_type"] = resolved_type
+
+    # If phrasing was clearly ambiguous and nothing resolved it, force a clarify.
+    if is_ambiguous and not spec_update.get("source_type") and not session["spec"].get("source_type"):
+        parsed["status"] = "clarify"
+        if not parsed.get("message"):
+            parsed["message"] = (
+                "Could you tell me which specific database or API you mean? "
+                "We currently support PostgreSQL, MySQL, SQL Server, and REST APIs."
+            )
+
+    session["spec"].update({k: v for k, v in spec_update.items() if v})
+
+    if dummy_mode:
+        session["spec"].setdefault("source_type", "postgresql")
+        session["spec"].setdefault("auth_method", "username_password")
+        session["spec"].setdefault("source_name", "new_source")
+        session["spec"].setdefault("host", "localhost")
+        parsed["status"] = "ready"
+        if not parsed.get("message"):
+            parsed["message"] = "Got it — generating with placeholder/dummy values."
+
+    session["messages"].append({"role": "assistant", "content": parsed.get("message", "")})
+
+    final_spec = None
+    if parsed.get("status") == "ready":
+        st = session["spec"].get("source_type", "unknown")
+        source_name = session["spec"].get("source_name", "new_source")
+        final_spec = {
+            "source_name": source_name,
+            "source_type": st,
+            "auth_method": session["spec"].get("auth_method", "username_password"),
+            "host": session["spec"].get("host", "localhost"),
+            "port": default_port(st),
+            "database": source_name,
+            "user": "your_username",
+            "raw_request": user_message,
+        }
+
+    return {
+        "session_id": session_id,
+        "status": parsed.get("status", "need_info"),
+        "message": parsed.get("message", ""),
+        "spec": final_spec,
+    }
