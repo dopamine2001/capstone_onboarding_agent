@@ -3,7 +3,7 @@ Connector Generator.
 Takes a structured spec (from agent.py) and fills the matching template
 (from templates.py) to produce final, ready-to-use Python connector code.
 """
-from templates import TEMPLATES, TEMPLATE_VERSION
+from templates import TEMPLATES, get_template_version
 
 ENV_VAR_MAP = {
     "postgresql": ["DB_HOST", "DB_PORT", "DB_NAME", "DB_USER", "DB_PASSWORD"],
@@ -33,7 +33,7 @@ def generate_connector_code(spec):
 
     try:
         code = template.format(
-            template_version=TEMPLATE_VERSION,
+            template_version=get_template_version(source_type),
             class_name=class_name,
             source_name=spec.get("source_name"),
             host=spec.get("host") or "localhost",

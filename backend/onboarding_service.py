@@ -11,6 +11,7 @@ import validator
 import doc_generator
 import storage
 import real_connectors
+import templates
 from agent import default_port
 
 
@@ -52,6 +53,10 @@ def run_onboarding(spec, dry_run=False):
             "field": None,
         }
     else:
+        # Attempt the real connection, but NEVER block generation on it
+        # failing — a wrong password or unreachable host is reported
+        # honestly in the result, not treated as a reason to refuse to
+        # generate the boilerplate connector.
         connection_result = real_connectors.test_real_connection(
             spec["source_type"],
             {
@@ -64,12 +69,6 @@ def run_onboarding(spec, dry_run=False):
                 "api_key": spec.get("api_key"),
             },
         )
-        if connection_result["status"] != "success":
-            field = connection_result.get("field")
-            return None, {
-                "message": f"Connection {connection_result['status']}: {connection_result['message']}",
-                "field_errors": {field: connection_result["message"]} if field else {},
-            }
 
     code, gen_error = generator.generate_connector_code(spec)
     if gen_error:
@@ -85,6 +84,7 @@ def run_onboarding(spec, dry_run=False):
 
     documentation = doc_generator.generate_documentation(spec, code, dry_run=dry_run)
     env_example = generator.generate_env_example(spec)
+    template_version = templates.get_template_version(spec["source_type"])
 
     stored_spec = {k: v for k, v in spec.items() if k not in ("password", "api_key")}
     record = storage.save_connector({
@@ -93,6 +93,7 @@ def run_onboarding(spec, dry_run=False):
         "env_example": env_example,
         "validation": validation_report,
         "documentation": documentation,
+        "template_version": template_version,
     })
 
     return record, None

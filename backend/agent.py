@@ -199,6 +199,18 @@ def _finalize_spec(spec, raw_request):
     }
 
 
+DUMMY_INTENT_PHRASES = [
+    "dummy", "placeholder", "just generate", "use defaults", "default values",
+    "boilerplate", "don't have real", "dont have real", "no real",
+    "fake data", "test values", "skip the connection",
+]
+
+
+def _wants_dummy_data(text):
+    lowered = text.lower()
+    return any(phrase in lowered for phrase in DUMMY_INTENT_PHRASES)
+
+
 def converse(session_id, user_message, dummy_mode=False):
     """
     Multi-turn conversational entry point. Keeps context across calls using
@@ -207,12 +219,13 @@ def converse(session_id, user_message, dummy_mode=False):
     across turns — the LLM is only used to pull whatever fields appear in
     THIS message. Only returns status "ready" once every required field
     for the detected source type has actually been gathered (or dummy_mode
-    was requested).
+    was requested, whether via an explicit flag or a typed phrase like
+    "just generate it with dummy data").
     """
     session = session_store.get_session(session_id)
     session["messages"].append({"role": "user", "content": user_message})
 
-    if dummy_mode:
+    if dummy_mode or _wants_dummy_data(user_message):
         session["dummy_mode"] = True
 
     # Deterministic fuzzy/synonym backstop for source_type — catches typos

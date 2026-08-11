@@ -46,6 +46,7 @@ import real_connectors
 import pdf_generator
 import session_store
 import onboarding_service
+import templates
 from field_schemas import get_field_schema, FIELD_SCHEMAS
 
 app = FastAPI(title="Data Source Onboarding & Connector Generation Agent")
@@ -171,6 +172,21 @@ def fields_for_source_type(source_type: str):
     if source_type not in FIELD_SCHEMAS:
         raise HTTPException(status_code=404, detail=f"Unknown source type: {source_type}")
     return {"source_type": source_type, "fields": get_field_schema(source_type)}
+
+
+@app.get("/api/templates/{source_type}/versions")
+def template_versions(source_type: str):
+    """Governance/versioning visibility: the current version of the
+    connector template for this source type, plus its full changelog —
+    so it's possible to see what changed between versions, not just a
+    string baked into generated code."""
+    if source_type not in FIELD_SCHEMAS:
+        raise HTTPException(status_code=404, detail=f"Unknown source type: {source_type}")
+    return {
+        "source_type": source_type,
+        "current_version": templates.get_template_version(source_type),
+        "changelog": templates.get_template_changelog(source_type),
+    }
 
 
 @app.post("/api/onboard", status_code=201)

@@ -2,10 +2,10 @@ import React, { useEffect, useRef, useState } from "react";
 import GenerationResult from "./GenerationResult";
 
 const QUICK_ACTIONS = [
-  { label: "Connect PostgreSQL", message: "Connect to our PostgreSQL sales database" },
-  { label: "Connect Stripe REST API", message: "Connect to the Stripe REST API using an API key" },
-  { label: "Disambiguate SQL", message: "Connect to my SQL database" },
-  { label: "Generate with dummy data", message: "Just generate it with dummy/placeholder values", dummy: true },
+  { label: "Connect PostgreSQL", message: "Connect to a PostgreSQL database" },
+  { label: "Connect MySQL", message: "Connect to a MySQL database" },
+  { label: "Connect SQL Server", message: "Connect to a SQL Server database" },
+  { label: "Connect REST API", message: "Connect to a REST API" },
 ];
 
 function ChatPanel({ messages, onSend, loading }) {

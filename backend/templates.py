@@ -5,7 +5,39 @@ Each template follows the same basic interface:
 This keeps every generated connector standardized and reusable.
 """
 
-TEMPLATE_VERSION = "1.0"
+TEMPLATE_VERSIONS = {
+    "postgresql": "1.1",
+    "mysql": "1.1",
+    "sqlserver": "1.1",
+    "rest_api": "1.1",
+}
+
+TEMPLATE_CHANGELOG = {
+    "postgresql": [
+        {"version": "1.0", "notes": "Initial standardized connector: connect(), test_connection(), fetch_schema(), close()."},
+        {"version": "1.1", "notes": "Added disconnect(), context manager support (__enter__/__exit__), and memory-safe extract_batch()."},
+    ],
+    "mysql": [
+        {"version": "1.0", "notes": "Initial standardized connector: connect(), test_connection(), fetch_schema(), close()."},
+        {"version": "1.1", "notes": "Added disconnect(), context manager support (__enter__/__exit__), and memory-safe extract_batch()."},
+    ],
+    "sqlserver": [
+        {"version": "1.0", "notes": "Initial standardized connector: connect(), test_connection(), fetch_schema(), close()."},
+        {"version": "1.1", "notes": "Added disconnect(), context manager support (__enter__/__exit__), and memory-safe extract_batch()."},
+    ],
+    "rest_api": [
+        {"version": "1.0", "notes": "Initial standardized connector: connect(), test_connection(), fetch_schema(), close()."},
+        {"version": "1.1", "notes": "Added disconnect(), context manager support (__enter__/__exit__), and paginated extract_batch()."},
+    ],
+}
+
+
+def get_template_version(source_type):
+    return TEMPLATE_VERSIONS.get(source_type, "unknown")
+
+
+def get_template_changelog(source_type):
+    return TEMPLATE_CHANGELOG.get(source_type, [])
 
 POSTGRESQL_TEMPLATE = '''"""
 Auto-generated PostgreSQL Connector
